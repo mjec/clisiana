@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/casimir/xdg-go"
@@ -15,23 +16,24 @@ import (
 const Version = "0.0.1"
 
 // Config is an application configuration object
+// Updates to this struct must be reflected in commandLineSetup()!
 type Config struct {
-	ConfigFile      string      `config-short:"config" config-name:"Configuration file"`
-	Email           string      `config-short:"email" config-name:"Email address"`
-	APIKey          string      `config-short:"apikey" config-name:"API key"`
-	APIBase         string      `config-short:"site" config-name:"API base URL"`
-	Secure          bool        `config-short:"secure" config-name:"Secure connection"`
-	PromptColor     string      `config-short:"prompt-color" config-name:"Prompt color"`
-	Prompt          string      `config-short:"prompt" config-name:"Prompt"`
-	RLHistory       bool        `config-short:"history" config-name:"History"`
-	RLHistoryFile   string      `config-short:"history-file" config-name:"History file"`
-	CacheFile       string      `config-short:"cache-file" config-name:"Cache file"`
-	Logging         bool        `config-short:"logging" config-name:"Logging"`
-	LogFile         string      `config-short:"log-file" config-name:"Log file"`
-	XDGApp          xdg.App     `config-short:"-" config-name:"-"`
-	CLIApp          cli.App     `config-short:"-" config-name:"-"`
-	Interface       *gocui.Gui  `config-short:"-" config-name:"-"`
-	MainTextChannel chan string `config-short:"-" config-name:"-"`
+	ConfigFile      string      `config-name:"config-file" yaml:"-"`
+	Email           string      `config-name:"email"`
+	APIKey          string      `config-name:"apikey"`
+	APIBase         string      `config-name:"site"`
+	Secure          bool        `config-name:"secure"`
+	Prompt          string      `config-name:"prompt"`
+	PromptColor     string      `config-name:"prompt-color"`
+	RLHistory       bool        `config-name:"history"`
+	RLHistoryFile   string      `config-name:"history-file"`
+	CacheFile       string      `config-name:"cache-file"`
+	Logging         bool        `config-name:"logging"`
+	LogFile         string      `config-name:"log-file"`
+	XDGApp          xdg.App     `config-name:"-" yaml:"-"`
+	CLIApp          cli.App     `config-name:"-" yaml:"-"`
+	Interface       *gocui.Gui  `config-name:"-" yaml:"-"`
+	MainTextChannel chan string `config-name:"-" yaml:"-"`
 }
 
 // Handles command line arguments and help printing
@@ -47,6 +49,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 {{range .VisibleFlags}}
    {{.}}{{end}}
 `
+	// TODO: Maybe make this a reflection of the Config struct?
 	cliApp.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:        "config,c",
@@ -134,6 +137,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 	cliApp.Before = func(context *cli.Context) error {
 		err := altsrc.InitInputSourceWithContext(config.CLIApp.Flags, configFileFromFlags)(context)
 		if err != nil {
+			// NB: Magic number in the prefix to be removed
 			return fmt.Errorf("Specified configuration file could not be read (%s)", strings.TrimSuffix(err.Error()[59:], "'"))
 		}
 		return nil
@@ -180,4 +184,40 @@ func configFileFromFlags(context *cli.Context) (altsrc.InputSourceContext, error
 		return nil, fmt.Errorf("not a regular file")
 	}
 	return nil, nil
+}
+
+func setConfigFromStrings(key string, value string) error {
+	reflectedConfig := reflect.ValueOf(config).Elem()
+	typeOfReflectedConfig := reflectedConfig.Type()
+	err := fmt.Errorf("No key found matching %s", key)
+	// NB: Magic constant ("-" for invisible fields)
+	if key == "-" {
+		return err
+	}
+
+setConfigFromStringsLoop:
+	for i := 0; i < reflectedConfig.NumField(); i++ {
+		if key == typeOfReflectedConfig.Field(i).Tag.Get("config-name") {
+			switch reflectedConfig.Field(i).Type().Kind() {
+			case reflect.String:
+				reflectedConfig.Field(i).SetString(value)
+				err = nil
+				break setConfigFromStringsLoop
+			case reflect.Bool:
+				switch strings.ToLower(strings.TrimSpace(value)) {
+				case "true", "t", "yes", "y", "1", "on":
+					reflectedConfig.Field(i).SetBool(true)
+					err = nil
+					break setConfigFromStringsLoop
+				case "false", "f", "no", "n", "0", "off":
+					reflectedConfig.Field(i).SetBool(false)
+					err = nil
+					break setConfigFromStringsLoop
+				default:
+					err = fmt.Errorf("%s is not a valid boolean value", value)
+				}
+			}
+		}
+	}
+	return err
 }
