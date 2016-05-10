@@ -10,7 +10,25 @@ import (
 
 	"github.com/codegangsta/cli"
 	"github.com/jroimartin/gocui"
+	"github.com/mjec/clisiana/lib/zulip"
 )
+
+// WindowMessageType is an enum of messages which may be sent to the main window
+type WindowMessageType int
+
+// WindowMessageType possibilities
+const (
+	PrivateMessage         WindowMessageType = iota // PrivateMessage represents a private message sent to a window
+	StreamMessage          WindowMessageType = iota // StreamMessage represents a private message sent to a window
+	ErrorMessage           WindowMessageType = iota // ErrorMessage represents an error sent to a window
+	CommandFeedbackMessage WindowMessageType = iota // CommandFeedbackMessage represents non-error command feedback sent to a window
+)
+
+// WindowMessage is a struct for messages sent to the main window
+type WindowMessage struct {
+	Type    WindowMessageType
+	Message zulip.Message
+}
 
 func run(c *cli.Context) error {
 	// Normalise API base to not terminate with /
@@ -42,12 +60,12 @@ func run(c *cli.Context) error {
 	// We can't guarantee this will run FIFO, but it should only matter
 	// when things are added very quickly one after the other because
 	// this is an unbuffered channel.
-	go func(mainWindow <-chan string, ifce *gocui.Gui) {
-		for text := range mainWindow {
+	go func(mainWindow <-chan WindowMessage, ifce *gocui.Gui) {
+		for msg := range mainWindow {
 			// NB Execute() does not run immediately but gets added
 			// to the user events queue. Again, this makes us one
 			// step further away from FIFO.
-			ifce.Execute(makeMainViewUpdater(text))
+			ifce.Execute(makeMainViewUpdater(msg.Message.Content))
 		}
 	}(config.MainTextChannel, config.Interface)
 

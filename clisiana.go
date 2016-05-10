@@ -12,7 +12,7 @@ func main() {
 	config = &Config{}
 	config.XDGApp = xdg.App{Name: "clisiana"}
 
-	config.MainTextChannel = make(chan string)
+	config.MainTextChannel = make(chan WindowMessage)
 
 	config.CLIApp = commandLineSetup()
 	config.CLIApp.Action = run

@@ -36,7 +36,10 @@ func parseLine(line string) {
 		fallthrough
 	case "help", "?":
 		ret += "Press F1 for full help. Use 'quit' or 'exit' to leave.\n"
-		config.MainTextChannel <- ret
+		config.MainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: ret},
+		}
 	case "clear":
 		var mainView *gocui.View
 		mainView, err = config.Interface.View("main")
@@ -85,31 +88,56 @@ func parseLine(line string) {
 			}
 			err = setConfigFromStrings(strings.ToLower(strings.TrimSpace(cmd[2])), cmd[3])
 			if err == nil {
-				ret += fmt.Sprintf("%s set to %s\n", strings.ToLower(strings.TrimSpace(cmd[2])), cmd[3])
+				config.MainTextChannel <- WindowMessage{
+					Type: CommandFeedbackMessage,
+					Message: zulip.Message{
+						Content: fmt.Sprintf("%s set to %s\n", strings.ToLower(strings.TrimSpace(cmd[2])), cmd[3]),
+					},
+				}
 				break
 			} else {
-				ret += fmt.Sprintf("Error: %s\n", err)
+				config.MainTextChannel <- WindowMessage{
+					Type: ErrorMessage,
+					Message: zulip.Message{
+						Content: ret,
+					},
+				}
 			}
 		CmdConfigShowHelp:
 			fallthrough
 		default:
 			ret += "Usage: config show | config set <name> <value> | config save\n"
 		}
-		config.MainTextChannel <- ret
+		config.MainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: ret},
+		}
 	case "ping":
-		go func(channel chan<- string) {
+		go func(channel chan<- WindowMessage) {
 			if err := zulip.CanReachServer(zulipContext); err == nil {
-				channel <- fmt.Sprintf("Connection to %s is working properly.\n", zulipContext.APIBase)
+				channel <- WindowMessage{
+					Type:    CommandFeedbackMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Connection to %s is working properly.\n", zulipContext.APIBase)},
+				}
 			} else {
-				channel <- fmt.Sprintf("Connection to %s/generate_204 failed: received %v.\n", zulipContext.APIBase, err)
+				channel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Connection to %s/generate_204 failed: received %v.\n", zulipContext.APIBase, err)},
+				}
 			}
 		}(config.MainTextChannel)
 	case "priv":
-		config.MainTextChannel <- "Not implemented"
+		config.MainTextChannel <- WindowMessage{
+			Type:    ErrorMessage,
+			Message: zulip.Message{Content: "Not implemented"},
+		}
 		// zulip.SendPrivateMessage(zulipContext, "Test message! **Hello world!** :octopus: Etc\nand etc.", []string{"test@example.com"}, "Subject for test message")
 	case "exit", "quit":
 		config.Interface.Execute(func(g *gocui.Gui) error { return gocui.ErrQuit })
 	default:
-		config.MainTextChannel <- fmt.Sprintf("Command: %s\n", cmd[0])
+		config.MainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: fmt.Sprintf("Command: %s\n", cmd[0])},
+		}
 	}
 }

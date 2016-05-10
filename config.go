@@ -18,22 +18,22 @@ const Version = "0.0.1"
 // Config is an application configuration object
 // Updates to this struct must be reflected in commandLineSetup()!
 type Config struct {
-	ConfigFile      string      `config-name:"config-file" yaml:"-"`
-	Email           string      `config-name:"email"`
-	APIKey          string      `config-name:"apikey"`
-	APIBase         string      `config-name:"site"`
-	Secure          bool        `config-name:"secure"`
-	Prompt          string      `config-name:"prompt"`
-	PromptColor     string      `config-name:"prompt-color"`
-	RLHistory       bool        `config-name:"history"`
-	RLHistoryFile   string      `config-name:"history-file"`
-	CacheFile       string      `config-name:"cache-file"`
-	Logging         bool        `config-name:"logging"`
-	LogFile         string      `config-name:"log-file"`
-	XDGApp          xdg.App     `config-name:"-" yaml:"-"`
-	CLIApp          cli.App     `config-name:"-" yaml:"-"`
-	Interface       *gocui.Gui  `config-name:"-" yaml:"-"`
-	MainTextChannel chan string `config-name:"-" yaml:"-"`
+	ConfigFile      string             `config-name:"config-file" yaml:"-"`
+	Email           string             `config-name:"email"`
+	APIKey          string             `config-name:"apikey"`
+	APIBase         string             `config-name:"site"`
+	Secure          bool               `config-name:"secure"`
+	Prompt          string             `config-name:"prompt"`
+	PromptColor     string             `config-name:"prompt-color"`
+	RLHistory       bool               `config-name:"history"`
+	RLHistoryFile   string             `config-name:"history-file"`
+	CacheFile       string             `config-name:"cache-file"`
+	Logging         bool               `config-name:"logging"`
+	LogFile         string             `config-name:"log-file"`
+	XDGApp          xdg.App            `config-name:"-" yaml:"-"`
+	CLIApp          cli.App            `config-name:"-" yaml:"-"`
+	Interface       *gocui.Gui         `config-name:"-" yaml:"-"`
+	MainTextChannel chan WindowMessage `config-name:"-" yaml:"-"`
 }
 
 // Handles command line arguments and help printing
