@@ -10,6 +10,7 @@ import (
 	"github.com/codegangsta/cli"
 	"github.com/codegangsta/cli/altsrc"
 	"github.com/jroimartin/gocui"
+	"github.com/mjec/clisiana/lib/notifications"
 	"github.com/mjec/clisiana/lib/zulip"
 )
 
@@ -19,24 +20,30 @@ const Version = "0.0.1"
 // Config is an application configuration object
 // Updates to this struct must be reflected in commandLineSetup()!
 type Config struct {
-	ConfigFile      string             `config-name:"config-file" yaml:"-"`
-	Email           string             `config-name:"email"`
-	APIKey          string             `config-name:"apikey"`
-	APIBase         string             `config-name:"site"`
-	Secure          bool               `config-name:"secure"`
-	Prompt          string             `config-name:"prompt"`
-	PromptColor     string             `config-name:"prompt-color"`
-	RLHistory       bool               `config-name:"history"`
-	RLHistoryFile   string             `config-name:"history-file"`
-	CacheFile       string             `config-name:"cache-file"`
-	Logging         bool               `config-name:"logging"`
-	LogFile         string             `config-name:"log-file"`
-	XDGApp          xdg.App            `config-name:"-" yaml:"-"`
-	CLIApp          cli.App            `config-name:"-" yaml:"-"`
-	Interface       *gocui.Gui         `config-name:"-" yaml:"-"`
-	MainTextChannel chan WindowMessage `config-name:"-" yaml:"-"`
-	zulipContext    *zulip.Context     `config-name:"-" yaml:"-"`
-	closeConnection chan bool          `config-name:"-" yaml:"-"`
+	// External configuration fields
+	ConfigFile           string `config-name:"config-file" yaml:"-"`
+	Email                string `config-name:"email"`
+	APIKey               string `config-name:"apikey"`
+	APIBase              string `config-name:"site"`
+	Secure               bool   `config-name:"secure"`
+	Prompt               string `config-name:"prompt"`
+	PromptColor          string `config-name:"prompt-color"`
+	NotificationsEnabled bool   `config-name:"notifications"`
+	ImagesPath           string `config-name:"icons-path"`
+	RLHistory            bool   `config-name:"history"`
+	RLHistoryFile        string `config-name:"history-file"`
+	Logging              bool   `config-name:"logging"`
+	LogFile              string `config-name:"log-file"`
+	CacheFile            string `config-name:"cache-file"`
+
+	// Internal fields
+	xdgApp          xdg.App
+	cliApp          cli.App
+	ui              *gocui.Gui
+	mainTextChannel chan WindowMessage
+	zulipContext    *zulip.Context
+	closeConnection chan bool
+	notifications   notifications.Notifier
 }
 
 // Handles command line arguments and help printing
@@ -56,7 +63,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 	cliApp.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:        "config,c",
-			Value:       config.XDGApp.ConfigPath("clisiana.yaml"),
+			Value:       config.xdgApp.ConfigPath("clisiana.yaml"),
 			Usage:       "The YAML file to load configuration from",
 			Destination: &config.ConfigFile,
 			EnvVar:      "CLISIANA_CONFIG",
@@ -96,17 +103,10 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 		}),
 		altsrc.NewStringFlag(cli.StringFlag{
 			Name:        "history-file",
-			Value:       config.XDGApp.DataPath("readline-history"),
+			Value:       config.xdgApp.DataPath("readline-history"),
 			Usage:       "The readline history file to write to",
 			Destination: &config.RLHistoryFile,
 			EnvVar:      "CLISIANA_HISTORY_FILE",
-		}),
-		altsrc.NewStringFlag(cli.StringFlag{
-			Name:        "prompt-color",
-			Usage:       "Prompt colour, one of green (default), black, red, yellow, blue, magenta, cyan, white or none",
-			Value:       "green",
-			Destination: &config.PromptColor,
-			EnvVar:      "CLISIANA_COLOR",
 		}),
 		altsrc.NewStringFlag(cli.StringFlag{
 			Name:        "prompt",
@@ -116,8 +116,28 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 			EnvVar:      "CLISIANA_PROMPT",
 		}),
 		altsrc.NewStringFlag(cli.StringFlag{
+			Name:        "prompt-color",
+			Usage:       "Prompt colour, one of green (default), black, red, yellow, blue, magenta, cyan, white or none",
+			Value:       "green",
+			Destination: &config.PromptColor,
+			EnvVar:      "CLISIANA_COLOR",
+		}),
+		altsrc.NewBoolTFlag(cli.BoolTFlag{
+			Name:        "notifications",
+			Usage:       "Turn on desktop notifications (default true, disable by --notifications=false)",
+			Destination: &config.NotificationsEnabled,
+			EnvVar:      "CLISIANA_NOTIFICATIONS",
+		}),
+		altsrc.NewStringFlag(cli.StringFlag{
+			Name:        "images-path",
+			Value:       config.xdgApp.DataPath("images/"),
+			Usage:       "The path of image resources for emoji",
+			Destination: &config.ImagesPath,
+			EnvVar:      "CLISIANA_IMAGES_PATH",
+		}),
+		altsrc.NewStringFlag(cli.StringFlag{
 			Name:        "cache-file",
-			Value:       config.XDGApp.CachePath("message-cache.sqlite3"),
+			Value:       config.xdgApp.CachePath("message-cache.sqlite3"),
 			Usage:       "The message cache file to write to",
 			Destination: &config.CacheFile,
 			EnvVar:      "CLISIANA_CACHE_FILE",
@@ -130,7 +150,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 		}),
 		altsrc.NewStringFlag(cli.StringFlag{
 			Name:        "log-file",
-			Value:       config.XDGApp.DataPath("message-log.sqlite3"),
+			Value:       config.xdgApp.DataPath("message-log.sqlite3"),
 			Usage:       "The message log file to write to (SQLite3 format)",
 			Destination: &config.LogFile,
 			EnvVar:      "CLISIANA_LOG_FILE",
@@ -138,7 +158,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 	}
 
 	cliApp.Before = func(context *cli.Context) error {
-		err := altsrc.InitInputSourceWithContext(config.CLIApp.Flags, configFileFromFlags)(context)
+		err := altsrc.InitInputSourceWithContext(config.cliApp.Flags, configFileFromFlags)(context)
 		if err != nil {
 			// NB: Magic number in the prefix to be removed
 			return fmt.Errorf("Specified configuration file could not be read (%s)", strings.TrimSuffix(err.Error()[59:], "'"))
@@ -168,7 +188,7 @@ func configFileFromFlags(context *cli.Context) (altsrc.InputSourceContext, error
 
 	// Make sure it's a regular file
 	if fi.Mode().IsRegular() {
-		// Open in RDONLY mode...
+		// Try to open in RDONLY mode
 		f, err := os.Open(context.String("config"))
 		if err != nil {
 			if context.IsSet("config") {

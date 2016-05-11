@@ -4,31 +4,28 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime/pprof"
+	"strings"
 
 	"github.com/casimir/xdg-go"
 	"github.com/mjec/clisiana/lib/zulip"
 )
 
 var config *Config
+
+// DEBUG should only be true during development
 var DEBUG = true
 
 func main() {
-	if DEBUG {
-		f, _ := os.Create("/tmp/clisiana-cpu-profile.prof")
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
-
 	config = &Config{}
-	config.XDGApp = xdg.App{Name: "clisiana"}
+	config.xdgApp = xdg.App{Name: "clisiana"}
 
-	config.MainTextChannel = make(chan WindowMessage, 5)
+	config.mainTextChannel = make(chan WindowMessage, 5)
 
-	config.CLIApp = commandLineSetup()
-	config.CLIApp.Action = run
+	config.cliApp = commandLineSetup()
 
-	config.CLIApp.Run(os.Args)
+	config.cliApp.Action = run
+
+	config.cliApp.Run(os.Args)
 }
 
 func startQueue() chan bool {
@@ -39,10 +36,6 @@ func startQueue() chan bool {
 		for {
 			select {
 			case <-closeConnection:
-				config.MainTextChannel <- WindowMessage{
-					Type:    DebugMessage,
-					Message: zulip.Message{Content: "Closing queue register goroutine..."},
-				}
 				close(closeConnection)
 				stopGettingEvents <- true
 				close(stopGettingEvents)
@@ -50,13 +43,9 @@ func startQueue() chan bool {
 			case <-restartConnection:
 				// no-op i.e. loop again
 			}
-			config.MainTextChannel <- WindowMessage{
-				Type:    DebugMessage,
-				Message: zulip.Message{Content: "Running register..."},
-			}
 			queueID, lastEventID, err := zulip.Register(context, zulip.MessageEvent, false)
 			if err != nil {
-				config.MainTextChannel <- WindowMessage{
+				config.mainTextChannel <- WindowMessage{
 					Type:    ErrorMessage,
 					Message: zulip.Message{Content: fmt.Sprintf("%v", err)},
 				}
@@ -71,31 +60,26 @@ func startQueue() chan bool {
 				for {
 					select {
 					case <-stopGettingEvents:
-						config.MainTextChannel <- WindowMessage{
-							Type:    DebugMessage,
-							Message: zulip.Message{Content: "Closing get events goroutine..."},
-						}
-						return
+						// We need to do this in case we are not in the middle of a GetEvents request
+						// when things are stopped
+						break
 					default:
 						// no-op i.e. loop again
 					}
 					var events = []zulip.Event{}
-					config.MainTextChannel <- WindowMessage{
-						Type:    DebugMessage,
-						Message: zulip.Message{Content: "Getting events..."},
-					}
 					events, err = zulip.GetEvents(context, queue, lastEventID, false)
 					if err != nil {
-						config.MainTextChannel <- WindowMessage{
-							Type:    ErrorMessage,
-							Message: zulip.Message{Content: fmt.Sprintf("%v", err)},
+						// Normally this will be because of a cancellation, in which case we just break
+						if !strings.HasSuffix(err.Error(), "request canceled") {
+							// If it isn't a cancellation, show the error message...
+							config.mainTextChannel <- WindowMessage{
+								Type:    ErrorMessage,
+								Message: zulip.Message{Content: fmt.Sprintf("%v", err)},
+							}
+							// ...and ask for a new queue, Just In Case
+							restartConnection <- true
 						}
-						restartConnection <- true
 						break
-					}
-					config.MainTextChannel <- WindowMessage{
-						Type:    DebugMessage,
-						Message: zulip.Message{Content: fmt.Sprintf("Got %d event(s)...", len(events))},
 					}
 					for i := range events {
 						if events[i].ID > lastEventID {
@@ -103,20 +87,16 @@ func startQueue() chan bool {
 						}
 						switch events[i].Type {
 						case zulip.HeartbeatEvent:
-							config.MainTextChannel <- WindowMessage{
-								Type:    DebugMessage,
-								Message: zulip.Message{Content: "Heartbeat received..."},
-							}
 							break
 						case zulip.MessageEvent:
 							switch events[i].Message.Type {
 							case zulip.StreamMessage:
-								config.MainTextChannel <- WindowMessage{
+								config.mainTextChannel <- WindowMessage{
 									Type:    StreamMessage,
 									Message: events[i].Message,
 								}
 							case zulip.PrivateMessage:
-								config.MainTextChannel <- WindowMessage{
+								config.mainTextChannel <- WindowMessage{
 									Type:    PrivateMessage,
 									Message: events[i].Message,
 								}
@@ -129,10 +109,6 @@ func startQueue() chan bool {
 					}
 				}
 			}(queueID, lastEventID, restartConnection, stopGettingEvents, context)
-		}
-		config.MainTextChannel <- WindowMessage{
-			Type:    DebugMessage,
-			Message: zulip.Message{Content: "Connection closed..."},
 		}
 	}(restartConnection, closeConnection, config.zulipContext)
 	restartConnection <- true

@@ -5,22 +5,51 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+// openRequests contains a list of all open requests
+var openRequests []chan struct{}
+
+// A mutex to prevent multiple routines attempting to modify openRequests at once
+var openRequestsMutex sync.Mutex
+
+// Transport is the transport used for HTTP requests to the Zulip server
+var transport *http.Transport
+
+// CancelAllRequests cancels all currently open requests to the Zulip server
+func CancelAllRequests() {
+	openRequestsMutex.Lock()
+	for i := range openRequests {
+		close(openRequests[i])
+	}
+	openRequests = []chan struct{}{}
+	openRequestsMutex.Unlock()
+}
+
 // A helper function to handle HTTP requests to the Zulip server specified in the context
-func makeZulipRequest(context *Context, params url.Values, url string, method HTTPMethod) (resp *http.Response, err error) {
-	var transport *http.Transport
-	if context.Secure == false {
+func makeZulipRequest(context *Context, params url.Values, url string, method HTTPMethod) (resp *http.Response, done chan<- bool, err error) {
+	if transport == nil {
 		transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			Proxy: http.ProxyFromEnvironment,
+			Dial: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
-	} else {
-		transport = &http.Transport{}
+		if context.Secure == false {
+			transport = &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			}
+		}
 	}
 
 	client := &http.Client{
@@ -44,7 +73,7 @@ func makeZulipRequest(context *Context, params url.Values, url string, method HT
 
 	req, err := http.NewRequest(methodString, context.APIBase+"/"+url, strings.NewReader(params.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.SetBasicAuth(context.Email, context.APIKey)
 	switch method {
@@ -53,9 +82,33 @@ func makeZulipRequest(context *Context, params url.Values, url string, method HT
 	case GET:
 		req.URL.RawQuery = params.Encode()
 	}
-	// TODO: keep a list of open requests that we can cancel using `transport.CancelRequest(req)`
-	// if we need to.
-	return client.Do(req)
+
+	cancel := make(chan struct{})
+	req.Cancel = cancel
+
+	openRequestsMutex.Lock()
+	openRequests = append(openRequests, cancel)
+	openRequestsMutex.Unlock()
+
+	doneChan := make(chan bool)
+	go func(req *http.Request, done chan bool) {
+		<-done
+		openRequestsMutex.Lock()
+		for i := range openRequests {
+			if openRequests[i] == req.Cancel {
+				close(openRequests[i])
+				openRequests[i] = openRequests[len(openRequests)-1]
+				openRequests[len(openRequests)-1] = nil
+				openRequests = openRequests[:len(openRequests)-1]
+				break
+			}
+		}
+		close(done)
+		openRequestsMutex.Unlock()
+	}(req, doneChan)
+
+	resp, err = client.Do(req)
+	return resp, doneChan, err
 }
 
 // A helper function to handle sending a private or stream message
@@ -83,11 +136,15 @@ func sendMessage(context *Context,
 	params.Add("to", strings.Join(messageTo, ","))
 	params.Add("content", messageContent)
 
-	resp, err := makeZulipRequest(context, params, "messages", POST)
+	resp, done, err := makeZulipRequest(context, params, "messages", POST)
 	if err != nil {
+		done <- true
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		done <- true
+		resp.Body.Close()
+	}()
 
 	body := json.NewDecoder(resp.Body)
 
@@ -148,11 +205,15 @@ func GetEvents(context *Context,
 	params.Add("last_event_id", strconv.FormatInt(lastEventID, 10))
 	params.Add("dont_block", strconv.FormatBool(doNotBlock))
 
-	resp, err := makeZulipRequest(context, params, "events", GET)
+	resp, done, err := makeZulipRequest(context, params, "events", GET)
 	if err != nil {
+		done <- true
 		return []Event{}, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		done <- true
+		resp.Body.Close()
+	}()
 
 	body := json.NewDecoder(resp.Body)
 
@@ -206,11 +267,14 @@ func Register(context *Context,
 	}
 	params.Add("event_types", string(jsonEventTypes[:]))
 
-	resp, err := makeZulipRequest(context, params, "register", POST)
+	resp, done, err := makeZulipRequest(context, params, "register", POST)
 	if err != nil {
 		return "", 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		done <- true
+		resp.Body.Close()
+	}()
 
 	body := json.NewDecoder(resp.Body)
 
@@ -230,10 +294,15 @@ func Register(context *Context,
 // CanReachServer returns true iff the context represents a server which can be reached successfully
 // Uses the generate_204 Zuplip API endpoint
 func CanReachServer(context *Context) error {
-	resp, err := makeZulipRequest(context, url.Values{}, "generate_204", GET)
+	resp, done, err := makeZulipRequest(context, url.Values{}, "generate_204", GET)
 	if err != nil {
+		done <- true
 		return err
 	}
+	defer func() {
+		done <- true
+		resp.Body.Close()
+	}()
 	if resp.StatusCode != 204 {
 		return fmt.Errorf("%s", resp.Status)
 	}

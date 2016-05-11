@@ -10,6 +10,7 @@ import (
 
 	"github.com/codegangsta/cli"
 	"github.com/jroimartin/gocui"
+	"github.com/mjec/clisiana/lib/notifications"
 	"github.com/mjec/clisiana/lib/zulip"
 )
 
@@ -42,19 +43,25 @@ func run(c *cli.Context) error {
 		os.MkdirAll(path.Dir(config.LogFile), 0755)
 	}
 
+	if config.NotificationsEnabled {
+		config.notifications = notifications.OSAppropriateNotifier()
+	} else {
+		config.notifications = notifications.DummyNotifier()
+	}
+
 	// Set up interface
-	config.Interface = gocui.NewGui()
-	if err := config.Interface.Init(); err != nil {
+	config.ui = gocui.NewGui()
+	if err := config.ui.Init(); err != nil {
 		log.Panicln(err)
 	}
-	defer config.Interface.Close()
-	config.Interface.Cursor = true
+	defer config.ui.Close()
+	config.ui.Cursor = true
 	var editor gocui.Editor = gocui.EditorFunc(cuiEditor)
-	config.Interface.Editor = editor
+	config.ui.Editor = editor
 
-	config.Interface.SetLayout(layout)
+	config.ui.SetLayout(layout)
 
-	if err := setGlobalKeybindings(config.Interface); err != nil {
+	if err := setGlobalKeybindings(config.ui); err != nil {
 		log.Panicln(err)
 	}
 
@@ -66,31 +73,39 @@ func run(c *cli.Context) error {
 			// Execute() does not run immediately but gets added
 			// to the user events queue. Again, this makes us one
 			// step further away from FIFO.
-			switch msg.Type {
-			case DebugMessage:
-				if DEBUG {
-					ifce.Execute(makeMainViewUpdater("*** DEBUG MESSAGE: " + msg.Message.Content))
-				}
-			default:
-				ifce.Execute(makeMainViewUpdater(msg.Message.Content + "\n"))
-			}
+			ifce.Execute(makeMainViewUpdater(msg))
 		}
-	}(config.MainTextChannel, config.Interface)
+	}(config.mainTextChannel, config.ui)
 
-	if err := config.Interface.MainLoop(); err != nil && err != gocui.ErrQuit {
+	if err := config.ui.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
 
 	return nil
 }
 
-func makeMainViewUpdater(s string) gocui.Handler {
+// makeMainViewUpdater returns a function which can be passed to gocui.Gui.Execute()
+// which will update the main view to display the WindowMessage.
+func makeMainViewUpdater(m WindowMessage) gocui.Handler {
+	str := m.Message.Content
+	switch m.Type {
+	case DebugMessage:
+		if !DEBUG {
+			return func(g *gocui.Gui) error { return nil }
+		}
+		str = fmt.Sprintf("DEBUG: %s\n", str)
+	case ErrorMessage:
+		str = fmt.Sprintf("ERROR: %s\n", str)
+	default:
+		str = fmt.Sprintf("%s\n", str)
+	}
+
 	return func(g *gocui.Gui) error {
 		main, err := g.View("main")
 		if err != nil {
 			return err
 		}
-		fmt.Fprint(main, s)
+		fmt.Fprint(main, str)
 		return nil
 	}
 }

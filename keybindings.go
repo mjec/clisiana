@@ -83,7 +83,7 @@ func cuiEditor(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) {
 }
 
 func clearCmdView() error {
-	v, err := config.Interface.View("cmd")
+	v, err := config.ui.View("cmd")
 	if err != nil {
 		return err
 	}
