@@ -22,6 +22,7 @@ const (
 	StreamMessage          WindowMessageType = iota // StreamMessage represents a private message sent to a window
 	ErrorMessage           WindowMessageType = iota // ErrorMessage represents an error sent to a window
 	CommandFeedbackMessage WindowMessageType = iota // CommandFeedbackMessage represents non-error command feedback sent to a window
+	DebugMessage           WindowMessageType = iota // DebugMessage represents a debug message (normally not shown)
 )
 
 // WindowMessage is a struct for messages sent to the main window
@@ -62,10 +63,17 @@ func run(c *cli.Context) error {
 	// this is an unbuffered channel.
 	go func(mainWindow <-chan WindowMessage, ifce *gocui.Gui) {
 		for msg := range mainWindow {
-			// NB Execute() does not run immediately but gets added
+			// Execute() does not run immediately but gets added
 			// to the user events queue. Again, this makes us one
 			// step further away from FIFO.
-			ifce.Execute(makeMainViewUpdater(msg.Message.Content))
+			switch msg.Type {
+			case DebugMessage:
+				if DEBUG {
+					ifce.Execute(makeMainViewUpdater("*** DEBUG MESSAGE: " + msg.Message.Content))
+				}
+			default:
+				ifce.Execute(makeMainViewUpdater(msg.Message.Content + "\n"))
+			}
 		}
 	}(config.MainTextChannel, config.Interface)
 

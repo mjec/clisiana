@@ -9,10 +9,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // A helper function to handle HTTP requests to the Zulip server specified in the context
-func makeZulipRequest(context *Context, params url.Values, url string, method string) (resp *http.Response, err error) {
+func makeZulipRequest(context *Context, params url.Values, url string, method HTTPMethod) (resp *http.Response, err error) {
 	var transport *http.Transport
 	if context.Secure == false {
 		transport = &http.Transport{
@@ -24,14 +25,36 @@ func makeZulipRequest(context *Context, params url.Values, url string, method st
 
 	client := &http.Client{
 		Transport: transport,
+		Timeout:   time.Duration(60 * time.Second),
 	}
 
-	req, err := http.NewRequest(method, context.APIBase+"/"+url, strings.NewReader(params.Encode()))
+	var methodString string
+	switch method {
+	case POST:
+		methodString = "POST"
+	case PUT:
+		methodString = "PUT"
+	case GET:
+		methodString = "GET"
+	case HEAD:
+		methodString = "HEAD"
+	default:
+		log.Panic("Valid HTTPMethod not accepted by makeZulipRequest()!")
+	}
+
+	req, err := http.NewRequest(methodString, context.APIBase+"/"+url, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.SetBasicAuth(context.Email, context.APIKey)
-	req.Header.Add("Content-type", "application/x-www-form-urlencoded")
+	switch method {
+	case POST:
+		req.Header.Add("Content-type", "application/x-www-form-urlencoded")
+	case GET:
+		req.URL.RawQuery = params.Encode()
+	}
+	// TODO: keep a list of open requests that we can cancel using `transport.CancelRequest(req)`
+	// if we need to.
 	return client.Do(req)
 }
 
@@ -40,7 +63,7 @@ func sendMessage(context *Context,
 	msgType MessageType,
 	messageContent string,
 	messageTo []string,
-	messageSubject string) (msgid uint64, err error) {
+	messageSubject string) (msgid int64, err error) {
 
 	params := url.Values{}
 
@@ -60,7 +83,7 @@ func sendMessage(context *Context,
 	params.Add("to", strings.Join(messageTo, ","))
 	params.Add("content", messageContent)
 
-	resp, err := makeZulipRequest(context, params, "messages", "POST")
+	resp, err := makeZulipRequest(context, params, "messages", POST)
 	if err != nil {
 		return 0, err
 	}
@@ -87,7 +110,7 @@ func sendMessage(context *Context,
 func SendPrivateMessage(context *Context,
 	messageContent string,
 	messageTo []string,
-	messageSubject string) (msgid uint64, err error) {
+	messageSubject string) (msgid int64, err error) {
 	return sendMessage(context, PrivateMessage, messageContent, messageTo, messageSubject)
 }
 
@@ -97,7 +120,7 @@ func SendPrivateMessage(context *Context,
 func SendStreamMessage(context *Context,
 	messageContent string,
 	messageTo string,
-	messageSubject string) (msgid uint64, err error) {
+	messageSubject string) (msgid int64, err error) {
 	return sendMessage(context, StreamMessage, messageContent, []string{messageTo}, messageSubject)
 }
 
@@ -117,15 +140,15 @@ func SendStreamMessage(context *Context,
 // hold the request open (block) until a new event is available or a few minutes
 // have passed (at which point the server will send a heartbeat event).
 func GetEvents(context *Context,
-	queueID uint64,
-	lastEventID uint64,
+	queueID string,
+	lastEventID int64,
 	doNotBlock bool) (events []Event, err error) {
 	params := url.Values{}
-	params.Add("queue_id", strconv.FormatUint(queueID, 10))
-	params.Add("last_event_id", strconv.FormatUint(lastEventID, 10))
+	params.Add("queue_id", queueID)
+	params.Add("last_event_id", strconv.FormatInt(lastEventID, 10))
 	params.Add("dont_block", strconv.FormatBool(doNotBlock))
 
-	resp, err := makeZulipRequest(context, params, "events", "GET")
+	resp, err := makeZulipRequest(context, params, "events", GET)
 	if err != nil {
 		return []Event{}, err
 	}
@@ -155,7 +178,7 @@ func GetEvents(context *Context,
 // entered it).
 func Register(context *Context,
 	eventTypes EventType,
-	applyMarkdown bool) (queueID uint64, lastEventID uint64, err error) {
+	applyMarkdown bool) (queueID string, lastEventID int64, err error) {
 
 	if eventTypes == 0 {
 		eventTypes = MessageEvent | SubscriptionsEvent | RealmUserEvent | PointerEvent
@@ -179,13 +202,13 @@ func Register(context *Context,
 	}
 	jsonEventTypes, err := json.Marshal(jsonEventTypesArray)
 	if err != nil {
-		return 0, 0, err
+		return "", 0, err
 	}
 	params.Add("event_types", string(jsonEventTypes[:]))
 
-	resp, err := makeZulipRequest(context, params, "register", "POST")
+	resp, err := makeZulipRequest(context, params, "register", POST)
 	if err != nil {
-		return 0, 0, err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
@@ -194,11 +217,11 @@ func Register(context *Context,
 	var ret zulipRegisterReturn
 	err = body.Decode(&ret)
 	if err != nil {
-		return 0, 0, err
+		return "", 0, err
 	}
 
 	if ret.Result != zulipSuccessResult {
-		return 0, 0, fmt.Errorf("API call returned %s: %s", ret.Result, ret.Message)
+		return "", 0, fmt.Errorf("API call returned %s: %s", ret.Result, ret.Message)
 	}
 
 	return ret.QueueID, ret.LastEventID, nil
@@ -207,7 +230,7 @@ func Register(context *Context,
 // CanReachServer returns true iff the context represents a server which can be reached successfully
 // Uses the generate_204 Zuplip API endpoint
 func CanReachServer(context *Context) error {
-	resp, err := makeZulipRequest(context, url.Values{}, "generate_204", "GET")
+	resp, err := makeZulipRequest(context, url.Values{}, "generate_204", GET)
 	if err != nil {
 		return err
 	}
@@ -222,7 +245,7 @@ func CanReachServer(context *Context) error {
 //
 // }
 //
-// func Deregister(context *Context, queue uint64) (err error) {
+// func Deregister(context *Context, queue int64) (err error) {
 //
 // }
 //

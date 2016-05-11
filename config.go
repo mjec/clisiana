@@ -10,6 +10,7 @@ import (
 	"github.com/codegangsta/cli"
 	"github.com/codegangsta/cli/altsrc"
 	"github.com/jroimartin/gocui"
+	"github.com/mjec/clisiana/lib/zulip"
 )
 
 // Version is the application version (follows http://semver.org/)
@@ -34,6 +35,8 @@ type Config struct {
 	CLIApp          cli.App            `config-name:"-" yaml:"-"`
 	Interface       *gocui.Gui         `config-name:"-" yaml:"-"`
 	MainTextChannel chan WindowMessage `config-name:"-" yaml:"-"`
+	zulipContext    *zulip.Context     `config-name:"-" yaml:"-"`
+	closeConnection chan bool          `config-name:"-" yaml:"-"`
 }
 
 // Handles command line arguments and help printing
@@ -74,7 +77,7 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 		}),
 		altsrc.NewStringFlag(cli.StringFlag{
 			Name:        "site",
-			Value:       "https://api.zulip.com/v1/",
+			Value:       "https://api.zulip.com/v1",
 			Usage:       "The base URL of the Zulip API to connect to",
 			Destination: &config.APIBase,
 			EnvVar:      "CLISIANA_ZULIP_URL,ZULIP_URL",
@@ -140,6 +143,12 @@ Usage: {{.HelpName}} {{if .VisibleFlags}}[options]{{end}}
 			// NB: Magic number in the prefix to be removed
 			return fmt.Errorf("Specified configuration file could not be read (%s)", strings.TrimSuffix(err.Error()[59:], "'"))
 		}
+
+		if config.Secure && strings.ToLower(config.APIBase[0:8]) != "https://" {
+			return fmt.Errorf("Base URL is not https but secure is set to true.\nEither pass --secure=false or make sure --site begins with https.")
+		}
+
+		updateZulipContext()
 		return nil
 	}
 	return *cliApp
@@ -184,6 +193,15 @@ func configFileFromFlags(context *cli.Context) (altsrc.InputSourceContext, error
 		return nil, fmt.Errorf("not a regular file")
 	}
 	return nil, nil
+}
+
+func updateZulipContext() {
+	config.zulipContext = &zulip.Context{
+		Email:   config.Email,
+		APIKey:  config.APIKey,
+		APIBase: config.APIBase,
+		Secure:  config.Secure,
+	}
 }
 
 func setConfigFromStrings(key string, value string) error {
