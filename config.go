@@ -37,13 +37,15 @@ type Config struct {
 	CacheFile            string `config-name:"cache-file"`
 
 	// Internal fields
-	xdgApp          xdg.App
-	cliApp          cli.App
-	ui              *gocui.Gui
-	mainTextChannel chan WindowMessage
-	zulipContext    *zulip.Context
-	closeConnection chan bool
-	notifications   notifications.Notifier
+	xdgApp                         xdg.App
+	cliApp                         cli.App
+	ui                             *gocui.Gui
+	mainTextChannel                chan WindowMessage
+	outgoingStreamMessagesChannel  chan zulip.OutgoingStreamMessage
+	outgoingPrivateMessagesChannel chan zulip.OutgoingPrivateMessage
+	zulipContext                   *zulip.Context
+	closeConnection                chan bool
+	notifications                  notifications.Notifier
 }
 
 // Handles command line arguments and help printing

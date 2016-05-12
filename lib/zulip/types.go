@@ -133,18 +133,31 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// OutgoingStreamMessage is a container for outgoing messages to a stream
+type OutgoingStreamMessage struct {
+	Content string
+	Stream  string
+	Topic   string
+}
+
+// OutgoingPrivateMessage is a container for outgoing messages to users
+type OutgoingPrivateMessage struct {
+	Content string
+	To      []string
+}
+
 // DisplayRecipient is a structure which contains either an array of Users or a Topic
 type DisplayRecipient struct {
-	Users []User `json:"users,omitempty"`
-	Topic string `json:"topic,omitempty"`
+	Users  []User `json:"users,omitempty"`
+	Stream string `json:"topic,omitempty"`
 }
 
 // UnmarshalJSON enables DisplayRecipient to be decoded from JSON
 func (d *DisplayRecipient) UnmarshalJSON(b []byte) (err error) {
-	topic, users := "", make([]User, 1)
-	if err = json.Unmarshal(b, &topic); err == nil {
+	stream, users := "", make([]User, 1)
+	if err = json.Unmarshal(b, &stream); err == nil {
 		// 'Denmark'
-		d.Topic = topic
+		d.Stream = stream
 		return nil
 	}
 	if err = json.Unmarshal(b, &users); err == nil {

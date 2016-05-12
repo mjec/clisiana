@@ -15,7 +15,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func parseLine(line string) {
+func parseCmdLine(line string) {
 	if line == "" {
 		return
 	}
@@ -37,17 +37,87 @@ func parseLine(line string) {
 		var mainView *gocui.View
 		mainView, err = config.ui.View("main")
 		if err != nil {
-			log.Panic(err)
+			log.Panic("Cannot clear: " + err.Error())
 		}
 		mainView.Clear()
-	case "start":
-		config.closeConnection = startQueue()
-	case "stop":
-		config.closeConnection <- true
+	case "disconnect":
+		config.closeConnection <- true // this channel will be closed by its receiver
 		zulip.CancelAllRequests()
+		config.closeConnection = nil
+		config.mainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: fmt.Sprintf("Disconnected from %s", config.zulipContext.APIBase)},
+		}
 	case "config":
 		handleCommandConfig(cmd)
+	case "private":
+		results := showNewPrivateMessagePrompt(config.ui, zulip.OutgoingPrivateMessage{})
+		go func(channel chan<- WindowMessage, result <-chan struct {
+			zulip.OutgoingPrivateMessage
+			error
+		}) {
+			r := <-result
+			if r.error != nil {
+				channel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Unable to get a new private message: %v.", r.error)},
+				}
+				return
+			}
+			msgid, err := zulip.SendPrivateMessage(config.zulipContext, r.OutgoingPrivateMessage)
+			if err != nil {
+				channel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: err.Error()},
+				}
+			} else {
+				channel <- WindowMessage{
+					Type:    DebugMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Private message sent: got message ID %d", msgid)},
+				}
+			}
+		}(config.mainTextChannel, results)
+	case "stream":
+		results := showNewStreamMessagePrompt(config.ui, zulip.OutgoingStreamMessage{
+			Stream: "test-stream",
+			Topic:  "Testing clisiana",
+		})
+		go func(channel chan<- WindowMessage, result <-chan struct {
+			zulip.OutgoingStreamMessage
+			error
+		}) {
+			r := <-result
+			if r.error != nil {
+				channel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Unable to get a new stream message: %v.", r.error)},
+				}
+				return
+			}
+			msgid, err := zulip.SendStreamMessage(config.zulipContext, r.OutgoingStreamMessage)
+			if err != nil {
+				channel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: err.Error()},
+				}
+			} else {
+				channel <- WindowMessage{
+					Type:    DebugMessage,
+					Message: zulip.Message{Content: fmt.Sprintf("Stream message sent: got message ID %d", msgid)},
+				}
+			}
+		}(config.mainTextChannel, results)
+	case "connect":
+		config.closeConnection = startReceivingMessages()
+		config.mainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: fmt.Sprintf("Okay, waiting for messages from %s", config.zulipContext.APIBase)},
+		}
 	case "ping":
+		config.mainTextChannel <- WindowMessage{
+			Type:    CommandFeedbackMessage,
+			Message: zulip.Message{Content: fmt.Sprintf("Attempting to ping %s", config.APIBase)},
+		}
 		go func(channel chan<- WindowMessage) {
 			if err := zulip.CanReachServer(config.zulipContext); err == nil {
 				channel <- WindowMessage{
@@ -61,18 +131,46 @@ func parseLine(line string) {
 				}
 			}
 		}(config.mainTextChannel)
-	case "priv":
-		config.mainTextChannel <- WindowMessage{
-			Type:    ErrorMessage,
-			Message: zulip.Message{Content: "Not implemented"},
-		}
-		// zulip.SendPrivateMessage(zulipContext, "Test message! **Hello world!** :octopus: Etc\nand etc.", []string{"test@example.com"}, "Subject for test message")
 	case "exit", "quit":
 		config.ui.Execute(func(g *gocui.Gui) error { return gocui.ErrQuit })
+	case "testmsg":
+		if DEBUG {
+			if len(cmd) != 2 {
+				config.mainTextChannel <- WindowMessage{
+					Type:    ErrorMessage,
+					Message: zulip.Message{Content: "Exactly one email address must be specified"},
+				}
+				break
+			}
+			config.mainTextChannel <- WindowMessage{
+				Type:    CommandFeedbackMessage,
+				Message: zulip.Message{Content: fmt.Sprintf("Attempting to send test message to %s", cmd[1])},
+			}
+			go func(channel chan<- WindowMessage) {
+				msgid, err := zulip.SendPrivateMessage(config.zulipContext,
+					zulip.OutgoingPrivateMessage{
+						To:      []string{cmd[1]},
+						Content: "Test message!\n**Hello world** is in bold.\n:octopus: is an emoji.",
+					})
+				if err != nil {
+					channel <- WindowMessage{
+						Type:    ErrorMessage,
+						Message: zulip.Message{Content: err.Error()},
+					}
+				} else {
+					channel <- WindowMessage{
+						Type:    DebugMessage,
+						Message: zulip.Message{Content: fmt.Sprintf("Test message sent: got message ID %d", msgid)},
+					}
+				}
+			}(config.mainTextChannel)
+			break
+		}
+		fallthrough
 	default:
 		config.mainTextChannel <- WindowMessage{
-			Type:    CommandFeedbackMessage,
-			Message: zulip.Message{Content: fmt.Sprintf("Command: %s", cmd[0])},
+			Type:    ErrorMessage,
+			Message: zulip.Message{Content: fmt.Sprintf("Command does not exist: %s", cmd[0])},
 		}
 	}
 }

@@ -164,21 +164,15 @@ func sendMessage(context *Context,
 // SendPrivateMessage sends a private message using the Context.
 // messageTo is an array of email addresses to which to send the message.
 // messageSubject may be blank.
-func SendPrivateMessage(context *Context,
-	messageContent string,
-	messageTo []string,
-	messageSubject string) (msgid int64, err error) {
-	return sendMessage(context, PrivateMessage, messageContent, messageTo, messageSubject)
+func SendPrivateMessage(context *Context, msg OutgoingPrivateMessage) (msgid int64, err error) {
+	return sendMessage(context, PrivateMessage, msg.Content, msg.To, "")
 }
 
 // SendStreamMessage sends a stream message using the Context.
 // messageTo is the name of a stream to send to and messageSubject is the topic (which
 // must not be blank).
-func SendStreamMessage(context *Context,
-	messageContent string,
-	messageTo string,
-	messageSubject string) (msgid int64, err error) {
-	return sendMessage(context, StreamMessage, messageContent, []string{messageTo}, messageSubject)
+func SendStreamMessage(context *Context, msg OutgoingStreamMessage) (msgid int64, err error) {
+	return sendMessage(context, StreamMessage, msg.Content, []string{msg.Stream}, msg.Topic)
 }
 
 //
