@@ -15,7 +15,7 @@ import (
 var config *Config
 
 // DEBUG should only be true during development
-var DEBUG = false
+var DEBUG = true
 
 func main() {
 	if !DEBUG {
@@ -108,7 +108,11 @@ func startReceivingMessages() chan bool {
 							switch events[i].Message.Type {
 							case zulip.StreamMessage:
 								config.notifications.Push(notifications.Notification{
-									Title:   fmt.Sprintf("%s > %s", events[i].Message.DisplayRecipient.Stream, events[i].Message.Subject),
+									Title: fmt.Sprintf(
+										"%s in %s > %s",
+										events[i].Message.SenderFullName,
+										events[i].Message.DisplayRecipient.Stream,
+										events[i].Message.Subject),
 									Content: events[i].Message.Content,
 								})
 								config.mainTextChannel <- WindowMessage{

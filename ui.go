@@ -137,7 +137,7 @@ func makeMainViewUpdater(m WindowMessage) gocui.Handler {
 	case PrivateMessage:
 		str = fmt.Sprintf("\n%s Private messge from %s\n%s\n\n", config.Prompt, m.Message.SenderFullName, str)
 	case StreamMessage:
-		str = fmt.Sprintf("\n%s Stream messge to %s\n%s\n\n", config.Prompt, m.Message.DisplayRecipient.Stream, str)
+		str = fmt.Sprintf("\n%s Stream messge to %s from %s\n%s\n\n", config.Prompt, m.Message.DisplayRecipient.Stream, m.Message.SenderFullName, str)
 	default:
 		str = fmt.Sprintf("%s\n", str)
 	}
